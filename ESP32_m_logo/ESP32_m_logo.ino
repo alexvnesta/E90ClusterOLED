@@ -22,6 +22,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <ESP32CAN.h>
+#include <CAN_config.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -63,10 +65,22 @@ const unsigned char M_logo [] PROGMEM = {
   0xc0, 0x1f, 0xe0, 0x04, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfc
 };
 
+//Init can device
+CAN_device_t CAN_cfg;
+
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200);   // Might need to go higher...
 
+  // Init CAN Bus
+  CAN_cfg.speed=CAN_SPEED_100KBPS; // BMW Kcan runs at 100kbps
+  CAN_cfg.tx_pin_id = GPIO_NUM_4;
+  CAN_cfg.rx_pin_id = GPIO_NUM_2;
+  CAN_cfg.rx_queue = xQueueCreate(10,sizeof(CAN_frame_t));
+  //initialize CAN Module
+  ESP32Can.CANInit();
+
+  // Init display
   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
@@ -77,6 +91,31 @@ void setup() {
 
 }
 void loop() {
+
+    CAN_frame_t rx_frame;
+    //receive next CAN frame from queue
+    if(xQueueReceive(CAN_cfg.rx_queue,&rx_frame, 3*portTICK_PERIOD_MS)==pdTRUE){
+
+      //do stuff!
+      if(rx_frame.FIR.B.FF==CAN_frame_std)
+        printf("New standard frame");
+      else
+        printf("New extended frame");
+
+      if(rx_frame.FIR.B.RTR==CAN_RTR)
+        printf(" RTR from 0x%08x, DLC %d\r\n",rx_frame.MsgID,  rx_frame.FIR.B.DLC);
+      else{
+        printf(" from 0x%08x, DLC %d\n",rx_frame.MsgID,  rx_frame.FIR.B.DLC);
+        /* convert to upper case and respond to sender */
+        for(int i = 0; i < 8; i++){
+          if(rx_frame.data.u8[i] >= 'a' && rx_frame.data.u8[i] <= 'z'){
+            rx_frame.data.u8[i] = rx_frame.data.u8[i] - 32;
+          }
+        }
+      }
+      //respond to sender
+      ESP32Can.CANWriteFrame(&rx_frame);
+    }
 
   
   display.clearDisplay();
